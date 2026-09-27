@@ -49,8 +49,22 @@ app.post("/new-user", (request, response) => {
 const server = http.createServer(app);
 const wsServer = new WebSocketServer({ server });
 
+function broadcastAll() {
+  [...wsServer.clients]
+    .filter((c) => c.readyState === WebSocket.OPEN)
+    .forEach((c) => c.send(JSON.stringify(userState)));
+}
+
+function broadcastMessage(msg, isBinary) {
+  [...wsServer.clients]
+    .filter((c) => c.readyState === WebSocket.OPEN)
+    .forEach((c) => c.send(msg, { binary: isBinary }));
+}
+
 wsServer.on("connection", (ws) => {
   ws.send(JSON.stringify(userState));
+
+  let userId = null;
 
   ws.on("message", (msg, isBinary) => {
     let data;
@@ -61,22 +75,24 @@ wsServer.on("connection", (ws) => {
       return;
     }
 
+    if (data.type === "send" && data.user?.id) {
+      if (!userId) {
+        userId = data.user.id;
+      }
+    }
+
     if (data.type === "exit" && data.user?.name) {
       const idx = userState.findIndex((u) => u.name === data.user.name);
       if (idx !== -1) {
         userState.splice(idx, 1);
-        logger.info(`User "${data.user.name}" removed from state`);
+        logger.info(`User "${data.user.name}" removed from state via exit message`);
+        broadcastAll();
       }
-      [...wsServer.clients]
-        .filter((c) => c.readyState === WebSocket.OPEN)
-        .forEach((c) => c.send(JSON.stringify(userState)));
       return;
     }
 
     if (data.type === "send" && data.message !== undefined) {
-      [...wsServer.clients]
-        .filter((c) => c.readyState === WebSocket.OPEN)
-        .forEach((c) => c.send(msg, { binary: isBinary }));
+      broadcastMessage(msg, isBinary);
       logger.info("Message broadcasted to all clients");
       return;
     }
@@ -84,6 +100,16 @@ wsServer.on("connection", (ws) => {
 
   ws.on("close", () => {
     logger.info("WebSocket client disconnected");
+
+    if (userId) {
+      const idx = userState.findIndex((u) => u.id === userId);
+      if (idx !== -1) {
+        const removedUser = userState[idx].name;
+        userState.splice(idx, 1);
+        logger.info(`User "${removedUser}" removed from state on disconnect`);
+        broadcastAll(); 
+      }
+    }
   });
 });
 
